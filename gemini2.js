@@ -1,14 +1,23 @@
-require('dotenv').config({ path: `${__dirname}/.env` });
-const fs = require('fs');
+const http = require('http');
 const { Client, SpotifyRPC } = require('discord.js-selfbot-v13');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const axios = require('axios');
+require('dotenv').config({ path: `${__dirname}/.env` });
+
+// HTTPサーバー（ヘルスチェック用）
+const server = http.createServer((req, res) => {
+  res.writeHead(200);
+  res.end('Bot is running');
+});
+server.listen(process.env.PORT || 8080, () => {
+  console.log(`[INFO] HTTP server running on port ${process.env.PORT || 8080}`);
+});
 
 // 環境変数の確認
-const requiredEnv = ['DISCORD_TOKEN', 'GOOGLE_AI_KEY'];
+const requiredEnv = ['DISCORD_TOKEN', 'GOOGLE_AI_KEY', 'GUILD_ID', 'ALLOWED_CHANNEL_ID', 'RESTRICTED_CHANNEL_ID'];
 for (const env of requiredEnv) {
   if (!process.env[env]) {
-    console.error(`エラー: .envファイルに${env}が定義されていません。`);
+    console.error(`[FATAL] エラー: .envファイルに${env}が定義されていません。`);
     process.exit(1);
   }
 }
@@ -16,13 +25,13 @@ console.log('[DEBUG] 環境変数:', {
   DISCORD_TOKEN: process.env.DISCORD_TOKEN ? '読み込み成功' : 'undefined',
   GOOGLE_AI_KEY: process.env.GOOGLE_AI_KEY ? '読み込み成功' : 'undefined',
   GUILD_ID: process.env.GUILD_ID ? '読み込み成功' : 'undefined',
+  ALLOWED_CHANNEL_ID: process.env.ALLOWED_CHANNEL_ID ? '読み込み成功' : 'undefined',
+  RESTRICTED_CHANNEL_ID: process.env.RESTRICTED_CHANNEL_ID ? '読み込み成功' : 'undefined',
 });
 
 // ボットの設定
 const client = new Client({ checkUpdate: false, syncStatus: false });
 const prefix = 'y!';
-const ALLOWED_CHANNEL_ID = '1386869975498756148';
-const RESTRICTED_CHANNEL_ID = '1369627467991486605';
 const DELETE_DELAY = 5000;
 const COOLDOWN_TIME = 5000;
 const SPAM_THRESHOLD = 3;
@@ -32,9 +41,14 @@ const commandHistories = new Map();
 const largeImageId = 'ab67706c0000da84ce73f513454cb93faeffc4ac';
 
 // Gemini APIのセットアップ
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_AI_KEY);
-const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
-const chatHistories = new Map();
+let genAI, model;
+try {
+  genAI = new GoogleGenerativeAI(process.env.GOOGLE_AI_KEY);
+  model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+  console.log('[INFO] Google Gemini AI初期化成功');
+} catch (error) {
+  console.error('[ERROR] Google Gemini AI初期化失敗:', error.message);
+}
 
 // Anilist API用のGraphQLクエリ
 const ANILIST_QUERY = `
@@ -70,21 +84,21 @@ function setSpotifyStatus(client) {
     .setState('宮内れんげ(小岩井ことり)')
     .setDetails('おかえり のんのんびより')
     .setStartTimestamp(Date.now())
-    .setEndTimestamp(Date.now() + 1000 * (5 * 60 + 31)) // 5分31秒
+    .setEndTimestamp(Date.now() + 1000 * (5 * 60 + 31))
     .setSongId('3zmCyWGe2griKG51XTFDXU')
     .setAlbumId('3hvf777K6J1tG1xR9r5SYR')
     .setArtistIds(['0ylRpgFg2vbA9ErHKPKMb8']);
   client.user.setActivity(spotify);
-  console.log('Spotify風ステータスを設定しました！');
+  console.log('[INFO] Spotify風ステータスを設定しました！');
 }
 
 // ステータスループ
 function startStatusLoop(client) {
-  const duration = 1000 * (5 * 60 + 31); // 5分31秒
+  const duration = 1000 * (5 * 60 + 31);
   setSpotifyStatus(client);
   setInterval(() => {
     setSpotifyStatus(client);
-    console.log('ステータスをリピートしました');
+    console.log('[INFO] ステータスをリピートしました');
   }, duration);
 }
 
@@ -98,7 +112,7 @@ function summarizeResponse(response) {
   return response;
 }
 
-// ロールプレイ要素を適用（絵文字なし）
+// ロールプレイ要素を適用
 function applyRoleplay(response, userInput) {
   console.log('[DEBUG] ロールプレイ適用後の応答:', response);
   return response;
@@ -108,7 +122,7 @@ function applyRoleplay(response, userInput) {
 const sendWithDelay = async (message, content, isFallback = false, retryCount = 0) => {
   try {
     const permissions = message.channel.type === 'DM' ? { send: true } : {
-      send: message.channel.permissionsFor(client.user) && message.channel.permissionsFor(client.user).has('SEND_MESSAGES') || false,
+      send: message.channel.permissionsFor(client.user)?.has('SEND_MESSAGES') || false,
     };
     if (!permissions.send) throw new Error('Missing SEND_MESSAGES permission');
     const sentMessage = await new Promise(resolve => setTimeout(() => resolve(message.channel.send(content)), 3000));
@@ -125,7 +139,7 @@ const sendWithDelay = async (message, content, isFallback = false, retryCount = 
 const sendProcessingMessage = async (message, content) => {
   try {
     const permissions = message.channel.type === 'DM' ? { send: true } : {
-      send: message.channel.permissionsFor(client.user) && message.channel.permissionsFor(client.user).has('SEND_MESSAGES') || false,
+      send: message.channel.permissionsFor(client.user)?.has('SEND_MESSAGES') || false,
     };
     if (!permissions.send) throw new Error('Missing SEND_MESSAGES permission');
     const processingMessage = await message.channel.send(content);
@@ -169,13 +183,13 @@ client.on('messageCreate', async (message) => {
   }
 
   // 許可チャンネルチェック
-  if (message.channel.id !== ALLOWED_CHANNEL_ID && message.channel.type !== 'DM') {
+  if (message.channel.id !== process.env.ALLOWED_CHANNEL_ID && message.channel.type !== 'DM') {
     console.log(`許可されていないチャンネル: ${message.channel.id}、無視`);
     return;
   }
 
   // 禁止チャンネル
-  if (message.channel.id === RESTRICTED_CHANNEL_ID) {
+  if (message.channel.id === process.env.RESTRICTED_CHANNEL_ID) {
     const restrictedMessage = await sendWithDelay(message, [
       `⚠️ 禁止チャンネル ⚠️`,
       `このチャンネルではコマンドは使えません！ 😔`,
@@ -259,8 +273,7 @@ client.on('messageCreate', async (message) => {
   if (isChatCommand || isMention || isReplyToBot) {
     let processingMessage = await sendProcessingMessage(message, '💬 応答生成中... 💬');
     try {
-      // リアクションの権限チェック
-      const canReact = message.channel.type === 'DM' || (message.channel.permissionsFor(client.user) && message.channel.permissionsFor(client.user).has('ADD_REACTIONS')) || false;
+      const canReact = message.channel.type === 'DM' || (message.channel.permissionsFor(client.user)?.has('ADD_REACTIONS')) || false;
       if (canReact) {
         await message.react('😺');
         console.log('ユーザーメッセージにリアクション😺を追加');
@@ -386,6 +399,27 @@ client.on('messageCreate', async (message) => {
 
 // エラーハンドリング
 client.on('error', error => logError('Client', 'N/A', error, null));
+
+// プロセスエラーハンドリング
+process.on('uncaughtException', (error) => {
+  console.error('[FATAL] Uncaught Exception:', error);
+});
+
+process.on('warning', (warning) => {
+  console.warn('[WARNING]', warning);
+});
+
+process.on('SIGTERM', () => {
+  console.log('[INFO] SIGTERM received. Closing client...');
+  client.destroy();
+  server.close();
+  process.exit(0);
+});
+
+// プロセスを維持するためのハートビートログ
+setInterval(() => {
+  console.log('[INFO] プロセス稼働中:', new Date().toISOString());
+}, 60000);
 
 // ボットログイン
 client.login(process.env.DISCORD_TOKEN).catch(error => {
