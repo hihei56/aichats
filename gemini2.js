@@ -4,10 +4,7 @@ const { Client, SpotifyRPC } = require('discord.js-selfbot-v13');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const axios = require('axios');
 
-// シングルトンクライアントの保証
-let clientInstance = null;
-
-// HTTPサーバー（ヘルスチェック用）
+// HTTPサーバー
 const server = http.createServer((req, res) => {
   res.writeHead(200);
   res.end('Bot is running');
@@ -32,7 +29,8 @@ console.log('[DEBUG] 環境変数:', {
   RESTRICTED_CHANNEL_ID: process.env.RESTRICTED_CHANNEL_ID ? '読み込み成功' : 'undefined',
 });
 
-// ボットの設定
+// シングルトンクライアント
+let clientInstance = null;
 if (!clientInstance) {
   clientInstance = new Client({ checkUpdate: false, syncStatus: false });
 }
@@ -45,7 +43,7 @@ const SPAM_COOLDOWN = 10000;
 const cooldowns = new Map();
 const commandHistories = new Map();
 const chatHistories = new Map();
-const processedMessages = new Set(); // 処理済みメッセージを追跡
+const processedMessages = new Set();
 const largeImageId = 'ab67706c0000da84ce73f513454cb93faeffc4ac';
 
 // Gemini APIのセットアップ
@@ -59,7 +57,7 @@ try {
   process.exit(1);
 }
 
-// Anilist API用のGraphQLクエリ
+// Anilist GraphQLクエリ
 const ANILIST_QUERY = `
   query ($search: String) {
     Media (search: $search, type: ANIME) {
@@ -133,6 +131,7 @@ const sendWithDelay = async (message, content, isFallback = false, retryCount = 
     const permissions = message.channel.type === 'DM' ? { send: true } : {
       send: message.channel.permissionsFor(client.user)?.has('SEND_MESSAGES') || false,
     };
+    console.log(`[DEBUG] Permissions for channel ${message.channel.id}:`, permissions);
     if (!permissions.send) throw new Error('Missing SEND_MESSAGES permission');
     const sentMessage = await new Promise(resolve => setTimeout(() => resolve(message.channel.send(content)), 3000));
     console.log(`[${new Date().toISOString()}] Sent ${isFallback ? 'fallback' : 'content'}: ${content.substring(0, 200)}`);
@@ -150,6 +149,7 @@ const sendProcessingMessage = async (message, content) => {
     const permissions = message.channel.type === 'DM' ? { send: true } : {
       send: message.channel.permissionsFor(client.user)?.has('SEND_MESSAGES') || false,
     };
+    console.log(`[DEBUG] Processing message permissions for channel ${message.channel.id}:`, permissions);
     if (!permissions.send) throw new Error('Missing SEND_MESSAGES permission');
     const processingMessage = await message.channel.send(content);
     console.log(`[${new Date().toISOString()}] Sent processing message: ${content}`);
@@ -181,32 +181,28 @@ client.once('ready', () => {
 });
 
 // メッセージ処理
-client.removeAllListeners('messageCreate'); // 既存のリスナーを削除
+client.removeAllListeners('messageCreate');
 client.on('messageCreate', async (message) => {
-  // 重複処理防止
   if (processedMessages.has(message.id)) {
     console.log(`[DEBUG] メッセージ ${message.id} は既に処理済み、無視`);
     return;
   }
   processedMessages.add(message.id);
 
+  console.log(`[DEBUG] メッセージ受信: ID=${message.id}, 内容="${message.content}", チャンネル=${message.channel.id}, サーバー=${message.guild?.id || 'DM'}`);
+
   if (message.author.bot) return;
 
-  console.log(`[DEBUG] メッセージ受信: "${message.content}" from ${message.author.tag} (ID: ${message.author.id}) in guild: ${message.guild?.id || 'DM'}`);
-
-  // サーバーチェック
   if (message.guild && message.guild.id !== process.env.GUILD_ID) {
     console.log(`[DEBUG] サーバーID不一致: ${message.guild.id} !== ${process.env.GUILD_ID}、無視`);
     return;
   }
 
-  // 許可チャンネルチェック
   if (message.channel.id !== process.env.ALLOWED_CHANNEL_ID && message.channel.type !== 'DM') {
     console.log(`[DEBUG] 許可されていないチャンネル: ${message.channel.id}、無視`);
     return;
   }
 
-  // 禁止チャンネル
   if (message.channel.id === process.env.RESTRICTED_CHANNEL_ID) {
     const restrictedMessage = await sendWithDelay(message, [
       `⚠️ 禁止チャンネル ⚠️`,
@@ -228,7 +224,6 @@ client.on('messageCreate', async (message) => {
   const args = message.content.toLowerCase().startsWith(prefix) ? message.content.slice(prefix.length).trim().split(/ +/) : [];
   const command = args.shift()?.toLowerCase() || '';
 
-  // メンション・リプライチェック
   let userInput = '';
   let isChatCommand = command === 'chat';
   let isMention = message.mentions.has(client.user);
@@ -260,7 +255,6 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
-  // スパムチェック
   const userId = message.author.id;
   const now = Date.now();
   let history = commandHistories.get(userId) || [];
@@ -278,7 +272,6 @@ client.on('messageCreate', async (message) => {
     }
   }
 
-  // 通常のレート制限
   const cooldownTimestamp = cooldowns.get(userId);
   if (cooldownTimestamp && now < cooldownTimestamp) {
     const timeLeft = ((cooldownTimestamp - now) / 1000).toFixed(1);
@@ -287,7 +280,6 @@ client.on('messageCreate', async (message) => {
   }
   cooldowns.set(userId, now + COOLDOWN_TIME);
 
-  // チャット処理
   if (isChatCommand || isMention || isReplyToBot) {
     let processingMessage = await sendProcessingMessage(message, '💬 応答生成中... 💬');
     try {
@@ -336,7 +328,6 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
-  // 猫画像
   if (command === 'cat') {
     let processingMessage = await sendProcessingMessage(message, '🐾 猫画像を取得中... 🐾');
     try {
@@ -353,7 +344,6 @@ client.on('messageCreate', async (message) => {
     }
   }
 
-  // アニメ情報
   if (command === 'anime') {
     const searchQuery = args.join(' ').trim();
     if (!searchQuery) {
@@ -385,7 +375,6 @@ client.on('messageCreate', async (message) => {
     }
   }
 
-  // ポケモン情報
   if (command === 'pokemon') {
     const pokemonName = args.join('-').toLowerCase().trim().replace(/[^a-z0-9-]/g, '').replace(/-+/g, '-');
     if (!pokemonName) {
