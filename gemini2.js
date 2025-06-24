@@ -38,6 +38,7 @@ const SPAM_THRESHOLD = 3;
 const SPAM_COOLDOWN = 10000;
 const cooldowns = new Map();
 const commandHistories = new Map();
+const chatHistories = new Map(); // 修正: chatHistories を初期化
 const largeImageId = 'ab67706c0000da84ce73f513454cb93faeffc4ac';
 
 // Gemini APIのセットアップ
@@ -212,7 +213,7 @@ client.on('messageCreate', async (message) => {
 
   // メンション・リプライチェック
   let userInput = '';
-  let isChatCommand = command === 'chat';
+  let isChatCommand = command posibilidades === 'chat';
   let isMention = message.mentions.has(client.user);
   let isReplyToBot = false;
 
