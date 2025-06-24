@@ -38,7 +38,7 @@ const SPAM_THRESHOLD = 3;
 const SPAM_COOLDOWN = 10000;
 const cooldowns = new Map();
 const commandHistories = new Map();
-const chatHistories = new Map(); // 修正: chatHistories を初期化
+const chatHistories = new Map();
 const largeImageId = 'ab67706c0000da84ce73f513454cb93faeffc4ac';
 
 // Gemini APIのセットアップ
@@ -49,6 +49,7 @@ try {
   console.log('[INFO] Google Gemini AI初期化成功');
 } catch (error) {
   console.error('[ERROR] Google Gemini AI初期化失敗:', error.message);
+  process.exit(1);
 }
 
 // Anilist API用のGraphQLクエリ
@@ -177,19 +178,16 @@ client.on('messageCreate', async (message) => {
 
   console.log(`メッセージ受信: "${message.content}" from ${message.author.tag} (ID: ${message.author.id}) in guild: ${message.guild?.id || 'DM'}`);
 
-  // サーバーチェック
   if (message.guild && message.guild.id !== process.env.GUILD_ID) {
     console.log(`サーバーID不一致: ${message.guild.id} !== ${process.env.GUILD_ID}、無視`);
     return;
   }
 
-  // 許可チャンネルチェック
   if (message.channel.id !== process.env.ALLOWED_CHANNEL_ID && message.channel.type !== 'DM') {
     console.log(`許可されていないチャンネル: ${message.channel.id}、無視`);
     return;
   }
 
-  // 禁止チャンネル
   if (message.channel.id === process.env.RESTRICTED_CHANNEL_ID) {
     const restrictedMessage = await sendWithDelay(message, [
       `⚠️ 禁止チャンネル ⚠️`,
@@ -211,9 +209,8 @@ client.on('messageCreate', async (message) => {
   const args = message.content.toLowerCase().startsWith(prefix) ? message.content.slice(prefix.length).trim().split(/ +/) : [];
   const command = args.shift()?.toLowerCase() || '';
 
-  // メンション・リプライチェック
   let userInput = '';
-  let isChatCommand = command posibilidades === 'chat';
+  let isChatCommand = command === 'chat'; // 修正済み
   let isMention = message.mentions.has(client.user);
   let isReplyToBot = false;
 
@@ -243,7 +240,6 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
-  // スパムチェック
   const userId = message.author.id;
   const now = Date.now();
   let history = commandHistories.get(userId) || [];
@@ -261,7 +257,6 @@ client.on('messageCreate', async (message) => {
     }
   }
 
-  // 通常のレート制限
   const cooldownTimestamp = cooldowns.get(userId);
   if (cooldownTimestamp && now < cooldownTimestamp) {
     const timeLeft = ((cooldownTimestamp - now) / 1000).toFixed(1);
@@ -270,7 +265,6 @@ client.on('messageCreate', async (message) => {
   }
   cooldowns.set(userId, now + COOLDOWN_TIME);
 
-  // チャット処理
   if (isChatCommand || isMention || isReplyToBot) {
     let processingMessage = await sendProcessingMessage(message, '💬 応答生成中... 💬');
     try {
@@ -319,7 +313,6 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
-  // 猫画像
   if (command === 'cat') {
     let processingMessage = await sendProcessingMessage(message, '🐾 猫画像を取得中... 🐾');
     try {
@@ -336,7 +329,6 @@ client.on('messageCreate', async (message) => {
     }
   }
 
-  // アニメ情報
   if (command === 'anime') {
     const searchQuery = args.join(' ').trim();
     if (!searchQuery) {
@@ -368,7 +360,6 @@ client.on('messageCreate', async (message) => {
     }
   }
 
-  // ポケモン情報
   if (command === 'pokemon') {
     const pokemonName = args.join('-').toLowerCase().trim().replace(/[^a-z0-9-]/g, '').replace(/-+/g, '-');
     if (!pokemonName) {
@@ -401,7 +392,6 @@ client.on('messageCreate', async (message) => {
 // エラーハンドリング
 client.on('error', error => logError('Client', 'N/A', error, null));
 
-// プロセスエラーハンドリング
 process.on('uncaughtException', (error) => {
   console.error('[FATAL] Uncaught Exception:', error);
 });
